@@ -1,5 +1,4 @@
-import org.apache.spark.SparkContext
-import org.apache.spark.SparkConf
+import org.apache.spark.{Partition, SparkConf, SparkContext, TaskContext}
 import org.apache.spark.rdd.RDD
 import spray.json._
 
@@ -10,7 +9,11 @@ object tf_idf {
     val conf = new SparkConf().setAppName("AirBnB").setMaster("local[*]")
     val sc = new SparkContext(conf)
 
-    val listings = sc.textFile("..\\airbnb_data\\listings_us.csv")
+    val path = args(0).trim()
+    val param = args(1).trim()
+    val id_or_hood = args(2).trim()
+
+    val listings = sc.textFile(path+"\\listings_us.csv")
     val listingsData = listings.map(line => line.split("\t")).mapPartitionsWithIndex { (idx, iter) => if (idx == 0) iter.drop(1) else iter }
 
     val listingmap = listingsData.map(row => ((row(54).toDouble, row(51).toDouble), row(43), row(19).toLowerCase()
@@ -18,6 +21,20 @@ object tf_idf {
       .split(" ")
       .filterNot(_.isEmpty)))
 
+    var number_of_appearance = sc.emptyRDD[(String, Int)]
+    var number_of_terms = 0L
+    if(param.equals("-l")){
+      val input = withID(id_or_hood, listingmap)
+      number_of_appearance = input._1
+      number_of_terms = input._2
+    } else if(param.equals("-n")){
+      val input = withNeighborhood(id_or_hood, listingmap, sc, path)
+      number_of_appearance = input._1
+      number_of_terms = input._2
+    } else {
+      println("Wrong parameter. Exit program")
+      System.exit(0)
+    }
 
     val all_listings = listingmap.map(row => (row._2, row._3))
 
@@ -44,16 +61,11 @@ object tf_idf {
 
     val word_tf_idf_RDD = sc.parallelize(word_tf_idf)
 
-    sc.parallelize(word_tf_idf_RDD.top(100))
+    sc.parallelize(word_tf_idf_RDD.top(100)).map(row => row._2+","+row._1).coalesce(1).saveAsTextFile(path+"/tf_idf.csv")
 
   }
 
-  def withNeighborhood(ID: String, listingsData : RDD[Array[String]], sc: SparkContext): (RDD[(String, Int)], Long) ={
-
-    val listingmap = listingsData.map(row => ((row(54).toDouble, row(51).toDouble), row(43), row(19).toLowerCase()
-      .replaceAll("[,.!?:)(/]"," ")
-      .split(" ")
-      .filterNot(_.isEmpty)))
+  def withNeighborhood(ID: String, listingmap : RDD[((Double, Double), String, Array[String])], sc: SparkContext, path: String): (RDD[(String, Int)], Long) ={
 
     //Case-classes for reading the GeoJSON-file.
     case class Properties(
@@ -85,7 +97,7 @@ object tf_idf {
 
     import MyJsonProtocol._
 
-    val input = scala.io.Source.fromFile("..\\airbnb_data\\neighbourhoods.geojson")("UTF-8").mkString.parseJson
+    val input = scala.io.Source.fromFile(path+"\\neighbourhoods.geojson")("UTF-8").mkString.parseJson
 
     val jsonCollection = input.convertTo[Features]
 
@@ -104,7 +116,7 @@ object tf_idf {
         if (!group.isEmpty) {
           group_string = group.get
         }
-        if (ID.equals(name) || ID.equals(group_string)) {
+        if (ID.equalsIgnoreCase(name) || ID.equalsIgnoreCase(group_string)) {
           val coords0 = geojson.geometry.coordinates
           val allEdges = new ArrayBuffer[Edge]
           var longmax = -99999.0
@@ -159,23 +171,19 @@ object tf_idf {
     val number_of_terms = flatmap.count()
     val number_of_appearance = flatmap.map(row => (row, 1)).reduceByKey((a,b) => a + b)
 
-    (number_of_appearance, number_of_terms)
+    return (number_of_appearance, number_of_terms)
   }
 
-  def withID(ID: String, listingsData : RDD[Array[String]]): (RDD[(String, Int)], Long) ={
-    val listingmap = listingsData.map(row => ((row(54).toDouble, row(51).toDouble), row(43), row(19).toLowerCase()
-      .replaceAll("[,.!?:)(/]"," ")
-      .split(" ")
-      .filterNot(_.isEmpty)))
+  def withID(ID: String, listingmap : RDD[((Double, Double), String, Array[String])]): (RDD[(String, Int)], Long) ={
 
     val all_listings = listingmap.map(row => (row._2, row._3))
 
-    val flatmap = all_listings.filter(row => row._1.equals(ID)).flatMap(row => row._2)
+    val flatmap = all_listings.filter(row => row._1.equalsIgnoreCase(ID)).flatMap(row => row._2)
 
     var number_of_appearance = flatmap.map(row => (row, 1)).reduceByKey((a,b) => a + b)
 
     var number_of_terms = flatmap.count()
 
-    (number_of_appearance, number_of_terms)
+    return (number_of_appearance, number_of_terms)
   }
 }
