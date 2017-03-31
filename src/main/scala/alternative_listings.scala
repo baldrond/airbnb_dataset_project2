@@ -8,15 +8,16 @@ object alternative_listings {
     val conf = new SparkConf().setAppName("AirBnB").setMaster("local[*]")
     val sc = new SparkContext(conf)
 
-    val listing_id = args(0).trim()
-    val date = args(1).trim()
-    val price = args(2).trim().toDouble
-    val distance = args(3).trim().toDouble
-    val n = args(4).trim().toInt
+    val path = args(0).trim()
+    val listing_id = args(1).trim()
+    val date = args(2).trim()
+    val price = args(3).trim().toDouble
+    val distance = args(4).trim().toDouble
+    val n = args(5).trim().toInt
     val params = listing_id+"_"+date+"_"+price+"_"+distance+"_"+n
 
-    val listings = sc.textFile("..\\airbnb_data\\listings_us.csv")
-    val calendar = sc.textFile("..\\airbnb_data\\calendar_us.csv")
+    val listings = sc.textFile(path+"\\listings_us.csv")
+    val calendar = sc.textFile(path+"\\calendar_us.csv")
 
     val listingsData = listings.map(line => line.split("\t")).mapPartitionsWithIndex { (idx, iter) => if (idx == 0) iter.drop(1) else iter }
     val calendarData = calendar.map(line => line.split("\t")).mapPartitionsWithIndex { (idx, iter) => if (idx == 0) iter.drop(1) else iter }
@@ -38,17 +39,17 @@ object alternative_listings {
 
     val final_map = calendar_join.map(row => (count_common_ameneties(row._2._1._3, chosenListing(0)._2._3),(row._1, row._2._1._5, row._2._1._4 ,row._2._1._2)))
 
-    sc.parallelize(final_map.top(n)).map(row => row._2._1+"\t"+row._2._2+"\t"+row._1+"\t"+row._2._3+"\t"+row._2._4).coalesce(1).saveAsTextFile(params+"_result.tsv")
+    sc.parallelize(final_map.top(n)).map(row => row._2._1+"\t"+row._2._2+"\t"+row._1+"\t"+row._2._3+"\t"+row._2._4).coalesce(1).saveAsTextFile(path+"\\"+params+"_result.tsv")
 
     //For creating the files for Carto
-    //createCartoFiles(listing_id, listingsData, calendar_join, chosenListing(0)._2._3)
+    //createCartoFiles(listing_id, listingsData, calendar_join, chosenListing(0)._2._3, path)
   }
 
-  def createCartoFiles(listing_id : String, listingsData : RDD[Array[String]], calendar_join : RDD[((String),((String, Double, Array[String], Double, String), (String, String)))], chosen_listing_ameneties : Array[String]) : Unit ={
+  def createCartoFiles(listing_id : String, listingsData : RDD[Array[String]], calendar_join : RDD[((String),((String, Double, Array[String], Double, String), (String, String)))], chosen_listing_ameneties : Array[String], path : String) : Unit ={
     val carto = listingsData.map(row => (row(43),(row(51), row(54), row(64), row(79), row(65))))
     val printCarto = calendar_join.join(carto).map(row => row._2._1._1._5+"\t"+row._2._2._5+"\t"+row._2._2._1+"\t"+row._2._2._2+"\t"+row._2._2._3+"\t"+Math.round((row._2._1._1._4)*100)/100.0+" km\t"+matching_amen(row._2._1._1._3, chosen_listing_ameneties)).collect()
 
-    val pw1 = new PrintWriter(new File("carto_data.tsv"))
+    val pw1 = new PrintWriter(new File(path+"carto_data.tsv"))
     pw1.write("name\tprice\tlat\tlon\tpicture-url\tdistance to original listing\tcommon ameneties\n")
     for(line <- printCarto){
       pw1.write(line)
@@ -56,7 +57,7 @@ object alternative_listings {
     pw1.close()
 
     val printOriginal = listingsData.filter(row => row(43).equals(listing_id)).map(row => row(60)+"\t"+row(65)+"\t"+row(51)+"\t"+row(54)+"\t"+row(64)+"\t"+row(2).replaceAll("[{}\"]", ""))
-    val pw2 = new PrintWriter(new File("carto_original.tsv"))
+    val pw2 = new PrintWriter(new File(path+"carto_original.tsv"))
     pw2.write("name\tprice\tlat\tlon\tpicture-url\tameneties\n")
     pw2.write(printOriginal.first())
     pw2.close()

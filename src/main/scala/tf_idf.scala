@@ -12,31 +12,30 @@ object tf_idf {
     val path = args(0).trim()
     val param = args(1).trim()
     val id_or_hood = args(2).trim()
+    val params = param+"_"+id_or_hood
 
     val listings = sc.textFile(path+"\\listings_us.csv")
     val listingsData = listings.map(line => line.split("\t")).mapPartitionsWithIndex { (idx, iter) => if (idx == 0) iter.drop(1) else iter }
 
-    val listingmap = listingsData.map(row => ((row(54).toDouble, row(51).toDouble), row(43), row(19).toLowerCase()
-      .replaceAll("[,.!?:)(/]"," ")
+    val all_listings = listingsData.map(row => (row(43), row(19).toLowerCase()
+      .replaceAll("[,.!?:)(/\"]"," ")
       .split(" ")
       .filterNot(_.isEmpty)))
 
     var number_of_appearance = sc.emptyRDD[(String, Int)]
     var number_of_terms = 0L
     if(param.equals("-l")){
-      val input = withID(id_or_hood, listingmap)
+      val input = withID(id_or_hood, all_listings)
       number_of_appearance = input._1
       number_of_terms = input._2
     } else if(param.equals("-n")){
-      val input = withNeighborhood(id_or_hood, listingmap, sc, path)
+      val input = withNeighborhood(id_or_hood, listingsData, sc, path)
       number_of_appearance = input._1
       number_of_terms = input._2
     } else {
       println("Wrong parameter. Exit program")
       System.exit(0)
     }
-
-    val all_listings = listingmap.map(row => (row._2, row._3))
 
     val number_of_documents = all_listings.count();
 
@@ -61,11 +60,11 @@ object tf_idf {
 
     val word_tf_idf_RDD = sc.parallelize(word_tf_idf)
 
-    sc.parallelize(word_tf_idf_RDD.top(100)).map(row => row._2+","+row._1).coalesce(1).saveAsTextFile(path+"/tf_idf.csv")
+    sc.parallelize(word_tf_idf_RDD.top(100)).map(row => row._2+","+row._1).coalesce(1).saveAsTextFile(path+"/"+params+"_tf_idf.csv")
 
   }
 
-  def withNeighborhood(ID: String, listingmap : RDD[((Double, Double), String, Array[String])], sc: SparkContext, path: String): (RDD[(String, Int)], Long) ={
+  def withNeighborhood(ID: String, listingsData : RDD[Array[String]], sc: SparkContext, path: String): (RDD[(String, Int)], Long) ={
 
     //Case-classes for reading the GeoJSON-file.
     case class Properties(
@@ -104,6 +103,11 @@ object tf_idf {
     val features = jsonCollection.features
 
     var neighbourhood_list = new ListBuffer[(String, Array[String])]()
+
+    val listingmap = listingsData.map(row => ((row(54).toDouble, row(51).toDouble), row(43), row(19).toLowerCase()
+      .replaceAll("[,.!?:)(/\"]"," ")
+      .split(" ")
+      .filterNot(_.isEmpty)))
 
     for (aListing <- listingmap.collect()) {
       val point = new Point(aListing._1._1, aListing._1._2)
@@ -163,7 +167,6 @@ object tf_idf {
         neighbourhood_list += entry
       }
     }
-
     val neighbourhoodRDD = sc.parallelize(neighbourhood_list)
 
     val flatmap = neighbourhoodRDD.flatMap(row => row._2)
@@ -174,9 +177,7 @@ object tf_idf {
     return (number_of_appearance, number_of_terms)
   }
 
-  def withID(ID: String, listingmap : RDD[((Double, Double), String, Array[String])]): (RDD[(String, Int)], Long) ={
-
-    val all_listings = listingmap.map(row => (row._2, row._3))
+  def withID(ID: String, all_listings : RDD[(String, Array[String])]): (RDD[(String, Int)], Long) ={
 
     val flatmap = all_listings.filter(row => row._1.equalsIgnoreCase(ID)).flatMap(row => row._2)
 
